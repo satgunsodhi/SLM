@@ -1,4 +1,7 @@
 train.bin
 validation.bin
+test.bin
 best_model_params.pt
 *.gif
+*.pt
+logs
