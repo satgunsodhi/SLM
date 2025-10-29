@@ -1,0 +1,4 @@
+torch
+streamlit
+tiktoken
+huggingface_hub
