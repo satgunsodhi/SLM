@@ -5,3 +5,4 @@ best_model_params.pt
 *.gif
 *.pt
 logs
+model_cache

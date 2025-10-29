@@ -6,7 +6,7 @@ from dataclasses import dataclass
 import streamlit as st
 import tiktoken
 import math
-
+import huggingface_hub
 
 class LayerNorm(nn.Module):
     """LayerNorm with optional bias"""
@@ -179,12 +179,7 @@ class GPT(nn.Module):
             # Get predictions
             logits, _ = self(idx_cond)
             logits = logits[:, -1, :] / temperature
-            
-            # Optional top-k filtering
-            if top_k is not None:
-                v, _ = torch.topk(logits, min(top_k, logits.size(-1)))
-                logits[logits < v[:, [-1]]] = -float('Inf')
-            
+                        
             # Sample from distribution
             probs = F.softmax(logits, dim=-1)
             idx_next = torch.multinomial(probs, num_samples=1)
@@ -194,19 +189,35 @@ class GPT(nn.Module):
 
 # ============= Streamlit App =============
 
-# Cache the model loading to avoid reloading on every interaction
+# Page config
+st.set_page_config(
+    page_title="FinPeak.ai",
+    page_icon="📈",
+    layout="wide"
+)
+
+# Cache the model loading
 @st.cache_resource
 def load_model():
-    """Load the trained model once and cache it"""
+    """Download and load model from Hugging Face"""
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     
+    # Download model from Hugging Face Hub
+    st.info("Downloading model from Hugging Face... (first time only)")
+    
+    model_path = huggingface_hub.hf_hub_download(
+        repo_id="satgun/finpeak-ai",  # Replace with your actual repo ID
+        filename="best_financial_slm.pt",
+        cache_dir="./model_cache"  # Cache locally to avoid re-downloading
+    )
+    
     # Load checkpoint
-    checkpoint = torch.load('best_financial_slm.pt', map_location=device, weights_only=False)
+    checkpoint = torch.load(model_path, map_location=device, weights_only=False)
     
     # Create model
     model = GPT(checkpoint['config']).to(device)
     model.load_state_dict(checkpoint['model_state_dict'])
-    model.eval()  # Set to evaluation mode
+    model.eval()
     
     # Load tokenizer
     enc = tiktoken.get_encoding("gpt2")
@@ -216,10 +227,16 @@ def load_model():
 # Initialize model
 model, enc, device = load_model()
 
-# ============= Streamlit UI =============
+# ============= Header with Branding =============
 
-st.title("💰 Financial AI Assistant")
-st.markdown("Ask me anything about finance, investing, or company analysis!")
+st.markdown("""
+<div style='text-align: center; padding: 1rem 0;'>
+    <h1 style='margin: 0; font-size: 3rem;'>📈 FinPeak<span style='color: #666;'>.ai</span></h1>
+    <p style='color: #888; margin-top: 0.5rem;'>Your AI-Powered Financial Intelligence Assistant</p>
+</div>
+""", unsafe_allow_html=True)
+
+st.markdown("---")
 
 # Initialize chat history
 if "messages" not in st.session_state:
@@ -231,7 +248,7 @@ for message in st.session_state.messages:
         st.markdown(message["content"])
 
 # Generation function
-def generate_response(prompt, max_tokens=200, temperature=0.7, topk=50):
+def generate_response(prompt, max_tokens=200, temperature=0.7):
     """Generate response from the model"""
     formatted_prompt = f"""### Instruction:
 {prompt}
@@ -263,52 +280,77 @@ def generate_response(prompt, max_tokens=200, temperature=0.7, topk=50):
     return "I couldn't generate a proper response. Please try rephrasing your question."
 
 # Chat input
-if prompt := st.chat_input("What would you like to know?"):
+if prompt := st.chat_input("Ask me anything about finance, investing, or company analysis..."):
     # Display user message
     st.chat_message("user").markdown(prompt)
     st.session_state.messages.append({"role": "user", "content": prompt})
     
     # Generate and display assistant response
     with st.chat_message("assistant"):
-        with st.spinner("Thinking..."):
-            response = generate_response(prompt)
+        with st.spinner("Analyzing..."):
+            response = generate_response(
+                prompt,
+                max_tokens=st.session_state.get('max_tokens', 200),
+                temperature=st.session_state.get('temperature', 0.7)
+            )
             st.markdown(response)
     
     st.session_state.messages.append({"role": "assistant", "content": response})
 
 # Sidebar with settings
 with st.sidebar:
-    st.header("⚙️ Settings")
+    st.markdown("### ⚙️ Generation Settings")
     
-    temperature = st.slider("Temperature", 0.1, 1.0, 0.7, 0.1, 
-                           help="Higher = more creative, Lower = more focused")
-    max_tokens = st.slider("Max Response Length", 50, 500, 200, 50,
-                          help="Maximum tokens to generate")
-    topk = st.slider("Top-K", 10, 100, 50, 10,
-                    help="Limit sampling to top K tokens")
+    st.session_state.temperature = st.slider(
+        "Temperature", 0.1, 1.0, 0.7, 0.1,
+        help="Higher = more creative, Lower = more focused"
+    )
+    st.session_state.max_tokens = st.slider(
+        "Max Response Length", 50, 500, 200, 50,
+        help="Maximum tokens to generate"
+    )
     
     st.markdown("---")
     st.markdown("### 📊 Model Info")
-    st.markdown(f"**Device:** {device}")
-    st.markdown(f"**Vocab Size:** {enc.n_vocab:,}")
+    st.markdown(f"**Device:** `{device}`")
+    st.markdown(f"**Vocab Size:** `{enc.n_vocab:,}`")
+    st.markdown(f"**Model:** Custom GPT")
     
-    if st.button("Clear Chat History"):
+    st.markdown("---")
+    
+    if st.button("🗑️ Clear Chat History", use_container_width=True):
         st.session_state.messages = []
         st.rerun()
 
-# Example prompts
+# Example prompts in sidebar
 st.sidebar.markdown("---")
-st.sidebar.markdown("### 💡 Example Questions")
+st.sidebar.markdown("### 💡 Try Asking")
+
 example_prompts = [
     "What is a P/E ratio?",
     "Should I invest in tech stocks?",
-    "Explain diversification",
-    "What are red flags in financial statements?"
+    "Explain portfolio diversification",
+    "What are red flags in financial statements?",
+    "How to analyze a company's balance sheet?",
+    "Difference between stocks and bonds?"
 ]
 
 for example in example_prompts:
-    if st.sidebar.button(example, key=example):
+    if st.sidebar.button(example, key=example, use_container_width=True):
         st.session_state.messages.append({"role": "user", "content": example})
-        response = generate_response(example)
+        response = generate_response(
+            example,
+            max_tokens=st.session_state.get('max_tokens', 200),
+            temperature=st.session_state.get('temperature', 0.7)
+        )
         st.session_state.messages.append({"role": "assistant", "content": response})
         st.rerun()
+
+# Footer
+st.sidebar.markdown("---")
+st.sidebar.markdown("""
+<div style='text-align: center; color: #888; font-size: 0.85rem;'>
+    <p>Powered by <strong>FinPeak.ai</strong></p>
+    <p style='font-size: 0.75rem;'>Custom GPT Model</p>
+</div>
+""", unsafe_allow_html=True)
