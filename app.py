@@ -5,8 +5,9 @@ import math
 from dataclasses import dataclass
 import streamlit as st
 import tiktoken
-import math
+from safetensors.torch import load_file
 import huggingface_hub
+
 
 class LayerNorm(nn.Module):
     """LayerNorm with optional bias"""
@@ -17,6 +18,7 @@ class LayerNorm(nn.Module):
     
     def forward(self, x):
         return F.layer_norm(x, self.weight.shape, self.weight, self.bias, 1e-5)
+
 
 class CausalSelfAttention(nn.Module):
     """Multi-head causal self-attention"""
@@ -67,6 +69,7 @@ class CausalSelfAttention(nn.Module):
         y = self.resid_dropout(self.c_proj(y))
         return y
 
+
 class MLP(nn.Module):
     """Feed-forward network"""
     def __init__(self, config):
@@ -78,6 +81,7 @@ class MLP(nn.Module):
 
     def forward(self, x):
         return self.dropout(self.c_proj(self.gelu(self.c_fc(x))))
+
 
 class Block(nn.Module):
     """Transformer block: attention + MLP with residual connections"""
@@ -93,6 +97,7 @@ class Block(nn.Module):
         x = x + self.mlp(self.ln2(x))
         return x
 
+
 @dataclass
 class GPTConfig:
     """GPT model configuration"""
@@ -103,6 +108,7 @@ class GPTConfig:
     n_embd: int           # Embedding dimension
     dropout: float = 0.0  # Dropout rate
     bias: bool = True     # Use bias in linear layers
+
 
 class GPT(nn.Module):
     """GPT Language Model"""
@@ -164,15 +170,7 @@ class GPT(nn.Module):
 
     @torch.no_grad()
     def generate(self, idx, max_new_tokens, temperature=1.0, top_k=None):
-        """
-        Generate new tokens autoregressively.
-        
-        Args:
-            idx: Input token indices [B, T]
-            max_new_tokens: Number of tokens to generate
-            temperature: Sampling temperature (higher = more random)
-            top_k: If set, only sample from top k most likely tokens
-        """
+        """Generate new tokens autoregressively"""
         for _ in range(max_new_tokens):
             # Crop context if needed
             idx_cond = idx if idx.size(1) <= self.config.block_size else idx[:, -self.config.block_size:]
@@ -187,6 +185,7 @@ class GPT(nn.Module):
         
         return idx
 
+
 # ============= Streamlit App =============
 
 # Page config
@@ -196,27 +195,50 @@ st.set_page_config(
     layout="wide"
 )
 
+
 # Cache the model loading
 @st.cache_resource
 def load_model():
-    """Download and load model from Hugging Face"""
+    """Download and load model from Hugging Face using SafeTensors"""
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     
-    # Download model from Hugging Face Hub
-    st.info("Downloading model from Hugging Face... (first time only)")
+    # Download SafeTensors model from Hugging Face Hub
+    with st.spinner("Downloading model from Hugging Face... (first time only)"):
+        model_path = huggingface_hub.hf_hub_download(
+            repo_id="satgun/finpeak-ai",
+            filename="model.safetensors",  # Changed from .pt to .safetensors
+            cache_dir="./model_cache"
+        )
+        
+        # Also download config if available (optional but recommended)
+        try:
+            config_path = huggingface_hub.hf_hub_download(
+                repo_id="satgun/finpeak-ai",
+                filename="config.json",
+                cache_dir="./model_cache"
+            )
+            import json
+            with open(config_path) as f:
+                config_dict = json.load(f)
+                config = GPTConfig(**config_dict)
+        except:
+            # Fallback to default config if config.json not available
+            config = GPTConfig(
+                block_size=256,
+                vocab_size=50257,
+                n_layer=8,
+                n_head=12,
+                n_embd=768,
+                dropout=0.14,
+                bias=True
+            )
     
-    model_path = huggingface_hub.hf_hub_download(
-        repo_id="satgun/finpeak-ai",  # Replace with your actual repo ID
-        filename="best_financial_slm.pt",
-        cache_dir="./model_cache"  # Cache locally to avoid re-downloading
-    )
+    # Load weights from SafeTensors
+    state_dict = load_file(model_path, device=device)
     
-    # Load checkpoint
-    checkpoint = torch.load(model_path, map_location=device, weights_only=False)
-    
-    # Create model
-    model = GPT(checkpoint['config']).to(device)
-    model.load_state_dict(checkpoint['model_state_dict'])
+    # Create and load model
+    model = GPT(config).to(device)
+    model.load_state_dict(state_dict)
     model.eval()
     
     # Load tokenizer
@@ -224,8 +246,10 @@ def load_model():
     
     return model, enc, device
 
+
 # Initialize model
 model, enc, device = load_model()
+
 
 # ============= Header with Branding =============
 
@@ -238,14 +262,17 @@ st.markdown("""
 
 st.markdown("---")
 
+
 # Initialize chat history
 if "messages" not in st.session_state:
     st.session_state.messages = []
+
 
 # Display chat history
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
+
 
 # Generation function
 def generate_response(prompt, max_tokens=200, temperature=0.7):
@@ -254,7 +281,6 @@ def generate_response(prompt, max_tokens=200, temperature=0.7):
 {prompt}
 
 ### Input:
-
 
 ### Response:
 """
@@ -279,6 +305,7 @@ def generate_response(prompt, max_tokens=200, temperature=0.7):
     
     return "I couldn't generate a proper response. Please try rephrasing your question."
 
+
 # Chat input
 if prompt := st.chat_input("Ask me anything about finance, investing, or company analysis..."):
     # Display user message
@@ -297,6 +324,7 @@ if prompt := st.chat_input("Ask me anything about finance, investing, or company
     
     st.session_state.messages.append({"role": "assistant", "content": response})
 
+
 # Sidebar with settings
 with st.sidebar:
     st.markdown("### ⚙️ Generation Settings")
@@ -314,6 +342,7 @@ with st.sidebar:
     st.markdown("### 📊 Model Info")
     st.markdown(f"**Device:** `{device}`")
     st.markdown(f"**Vocab Size:** `{enc.n_vocab:,}`")
+    st.markdown(f"**Format:** `SafeTensors`")
     st.markdown(f"**Model:** Custom GPT")
     
     st.markdown("---")
@@ -321,6 +350,7 @@ with st.sidebar:
     if st.button("🗑️ Clear Chat History", use_container_width=True):
         st.session_state.messages = []
         st.rerun()
+
 
 # Example prompts in sidebar
 st.sidebar.markdown("---")
@@ -346,11 +376,12 @@ for example in example_prompts:
         st.session_state.messages.append({"role": "assistant", "content": response})
         st.rerun()
 
+
 # Footer
 st.sidebar.markdown("---")
 st.sidebar.markdown("""
 <div style='text-align: center; color: #888; font-size: 0.85rem;'>
     <p>Powered by <strong>FinPeak.ai</strong></p>
-    <p style='font-size: 0.75rem;'>Custom GPT Model</p>
+    <p style='font-size: 0.75rem;'>Custom GPT Model • SafeTensors</p>
 </div>
 """, unsafe_allow_html=True)

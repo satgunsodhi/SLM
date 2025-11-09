@@ -2,3 +2,4 @@ torch
 streamlit
 tiktoken
 huggingface_hub
+safetensors
